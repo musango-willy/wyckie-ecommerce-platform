@@ -1,0 +1,167 @@
+<?php
+require __DIR__ . '/vendor/autoload.php';
+
+use Wyckie\EcommercePlatform\PaymentGateway;
+use Wyckie\EcommercePlatform\ImageProcessor;
+use Wyckie\EcommercePlatform\ReportGenerator;
+
+// Initialize core components
+$stripeKey = 'sk_test_paste_your_actual_stripe_key_here'; // Replace with your real Stripe Key
+$payment = new PaymentGateway($stripeKey);
+$report = new ReportGenerator();
+
+$checkoutUrl = '';
+$message = '';
+
+// Handle Actions
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Action 1: Buy Mock Product (Generates Stripe Checkout)
+    if (isset($_POST['action']) && $_POST['action'] === 'checkout') {
+        try {
+            $checkoutUrl = $payment->createCheckoutSession(
+                3500, // $35.00 in cents
+                'usd',
+                'http://localhost/ecommerce/index.php?status=success',
+                'http://localhost/ecommerce/index.php?status=cancel'
+            );
+        } catch (\Exception $e) {
+            $message = "Stripe Error: " . $e->getMessage();
+        }
+    }
+
+    // Action 2: Export Spreadsheet Report
+    if (isset($_POST['action']) && $_POST['action'] === 'export') {
+        try {
+            $mockOrders = [
+                ['id' => 'ORD-1001', 'email' => 'customer1@example.com', 'total' => 35.00, 'status' => 'Paid'],
+                ['id' => 'ORD-1002', 'email' => 'customer2@example.com', 'total' => 70.00, 'status' => 'Paid']
+            ];
+            $filePath = __DIR__ . '/sales_report.xlsx';
+            $report->exportSalesReport($filePath, $mockOrders);
+            $message = "Spreadsheet successfully saved to: " . $filePath;
+        } catch (\Exception $e) {
+            $message = "Excel Error: " . $e->getMessage();
+        }
+    }
+}
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wyckie Ecommerce Platform</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://jsdelivr.net"></script>
+</head>
+<body class="bg-gray-100 font-sans">
+
+    <div class="max-w-6xl mx-auto px-4 py-8">
+        <!-- Header -->
+        <header class="mb-8 border-b border-gray-200 pb-4 flex justify-between items-center">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-800">Wyckie Engine</h1>
+                <p class="text-sm text-gray-500">Custom Ecommerce Platform Control Panel</p>
+            </div>
+            <span class="bg-green-100 text-green-800 text-xs font-semibold px-3 py-1 rounded-full">System Online</span>
+        </header>
+
+        <!-- Status Alerts -->
+        <?php if (!empty($message)): ?>
+            <div class="mb-6 p-4 bg-blue-50 border-l-4 border-blue-500 text-blue-700 rounded-r shadow-xs">
+                <?= htmlspecialchars($message) ?>
+            </div>
+        <?php endif; ?>
+
+        <?php if (isset($_GET['status']) && $_GET['status'] === 'success'): ?>
+            <div class="mb-6 p-4 bg-green-50 border-l-4 border-green-500 text-green-700 rounded-r shadow-xs">
+                🎉 Payment completed successfully! Thank you for your purchase.
+            </div>
+        <?php endif; ?>
+
+        <!-- Grid Layout -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            
+            <!-- Column 1: Storefront / Checkout Integration -->
+            <div class="bg-white p-6 rounded-lg shadow-xs border border-gray-200">
+                <h2 class="text-xl font-semibold text-gray-700 mb-4">🛒 Live Storefront Demo</h2>
+                <div class="border border-gray-100 rounded-lg overflow-hidden mb-4">
+                    <div class="bg-gray-200 h-48 flex items-center justify-between text-gray-400 font-bold px-4">
+                        Product Preview Image Place
+                    </div>
+                    <div class="p-4">
+                        <h3 class="font-bold text-gray-800 text-lg">Premium Wireless Headphones</h3>
+                        <p class="text-sm text-gray-500 mt-1">High-fidelity audio with active noise cancellation properties.</p>
+                        <div class="flex justify-between items-center mt-4">
+                            <span class="text-xl font-extrabold text-gray-900">$35.00</span>
+                            <form method="POST">
+                                <input type="hidden" name="action" value="checkout">
+                                <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2 rounded transition-colors cursor-pointer">
+                                    Generate Checkout
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+
+                <?php if (!empty($checkoutUrl)): ?>
+                    <div class="mt-4 p-4 bg-indigo-50 border border-indigo-100 rounded text-center">
+                        <p class="text-sm text-indigo-800 font-medium mb-2">Secure Link Ready!</p>
+                        <a href="<?= $checkoutUrl ?>" target="_blank" class="inline-block bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold py-2 px-4 rounded transition-colors shadow-xs">
+                            Go to Stripe Payment Page &rarr;
+                        </a>
+                    </div>
+                <?php endif; ?>
+            </div>
+
+            <!-- Column 2: Media Management (ImageProcessor) -->
+            <div class="bg-white p-6 rounded-lg shadow-xs border border-gray-200">
+                <h2 class="text-xl font-semibold text-gray-700 mb-4">🖼️ Catalog Image Studio</h2>
+                <p class="text-sm text-gray-500 mb-4">Upload raw product images to crop, compress, and resize automatically to 300x300px aspect ratios.</p>
+                
+                <form action="#" method="POST" enctype="multipart/form-data" class="space-y-4">
+                    <div class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-indigo-500 transition-colors">
+                        <input type="file" name="product_image" class="hidden" id="file-upload">
+                        <label for="file-upload" class="cursor-pointer text-indigo-600 font-medium hover:text-indigo-500">
+                            Choose a product image file
+                        </label>
+                        <p class="text-xs text-gray-400 mt-1">PNG, JPG up to 5MB</p>
+                    </div>
+                    <button type="button" class="w-full bg-gray-800 text-gray-400 font-medium py-2 rounded cursor-not-allowed" disabled>
+                        Upload & Transform Image
+                    </button>
+                </form>
+            </div>
+
+            <!-- Column 3: Data Analytics & Reporting (ReportGenerator) -->
+            <div class="bg-white p-6 rounded-lg shadow-xs border border-gray-200 flex flex-col justify-between">
+                <div>
+                    <h2 class="text-xl font-semibold text-gray-700 mb-4">📊 Business Intelligence</h2>
+                    <p class="text-sm text-gray-500 mb-4">Compile live transactional databases directly into formatted Microsoft Excel files for distribution.</p>
+                    
+                    <div class="bg-gray-50 p-4 rounded border border-gray-100 mb-4">
+                        <div class="flex justify-between text-sm text-gray-600 mb-1">
+                            <span>Total Platform Sales</span>
+                            <span class="font-bold text-gray-800">$105.00</span>
+                        </div>
+                        <div class="flex justify-between text-sm text-gray-600">
+                            <span>Active Orders Logged</span>
+                            <span class="font-bold text-gray-800">4 Records</span>
+                        </div>
+                    </div>
+                </div>
+
+                <form method="POST">
+                    <input type="hidden" name="action" value="export">
+                    <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2.5 rounded transition-colors text-center shadow-xs cursor-pointer">
+                        Export Sales Report (.XLSX)
+                    </button>
+                </form>
+            </div>
+
+        </div>
+    </div>
+
+</body>
+</html>

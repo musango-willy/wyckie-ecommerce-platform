@@ -1,0 +1,25 @@
+<?php
+require __DIR__ . '/vendor/autoload.php';
+
+use Wyckie\EcommercePlatform\PaymentGateway;
+use Wyckie\EcommercePlatform\ImageProcessor;
+use Wyckie\EcommercePlatform\ReportGenerator;
+
+// Initialize components
+$stripeKey = 'sk_test_paste_your_actual_stripe_key_here'; 
+$payment = new PaymentGateway($stripeKey);
+$report = new ReportGenerator();
+$processor = new ImageProcessor(); // Powered by your GD extension!
+
+$checkoutUrl = '';
+$message = '';
+$previewThumbnail = 'https://placehold.co';
+
+// Check if a resized image already exists to display as a preview
+if (file_exists(__DIR__ . '/uploads/thumb_product.jpg')) {
+    $previewThumbnail = 'uploads/thumb_product.jpg?' . time(); // Cache busting string
+}
+
+// Handle Actions
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    
