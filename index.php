@@ -1,4 +1,9 @@
 <?php
+// Force error displaying for seamless troubleshooting
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
+
 session_start();
 
 require __DIR__ . '/vendor/autoload.php';
@@ -11,6 +16,9 @@ use Wyckie\EcommercePlatform\Database;
 
 $message = '';
 $checkoutUrl = '';
+$products = [];
+$cartRows = [];
+$orderHistory = [];
 
 // Handle Admin Logout Action
 if (isset($_GET['action']) && $_GET['action'] === 'logout') {
@@ -86,8 +94,7 @@ try {
         $cartCheckQuery = $db->query("SELECT id FROM carts WHERE session_id = ? LIMIT 1", [$sessionToken]);
     }
     
-    // Normalize row extract
-    $cartId = isset($cartCheckQuery[0]['id']) ? $cartCheckQuery[0]['id'] : (isset($cartCheckQuery['id']) ? $cartCheckQuery['id'] : 1);
+    $cartId = isset($cartCheckQuery['id']) ? $cartCheckQuery['id'] : (isset($cartCheckQuery['id']) ? $cartCheckQuery['id'] : 1);
 
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         
@@ -96,9 +103,8 @@ try {
             $itemCheck = $db->query("SELECT id, quantity FROM cart_items WHERE cart_id = ? AND product_id = ? LIMIT 1", [$cartId, $productId]);
             
             if (!empty($itemCheck)) {
-                $row = isset($itemCheck[0]) ? $itemCheck[0] : $itemCheck;
-                $newQty = $row['quantity'] + 1;
-                $db->query("UPDATE cart_items SET quantity = ? WHERE id = ?", [$newQty, $row['id']]);
+                $row = isset($itemCheck) ? $itemCheck : $itemCheck;
+                $db->query("UPDATE cart_items SET quantity = quantity + 1 WHERE id = ?", [$row['id']]);
             } else {
                 $db->query("INSERT INTO cart_items (cart_id, product_id, quantity) VALUES (?, ?, 1)", [$cartId, $productId]);
             }
@@ -126,8 +132,6 @@ try {
     }
 
     $products = $db->query("SELECT * FROM products");
-    
-    // Explicitly select the exact multi-item fields for clean tabular rendering
     $cartRows = $db->query("SELECT ci.id, ci.quantity, p.name, p.price FROM cart_items ci JOIN products p ON ci.product_id = p.id WHERE ci.cart_id = ?", [$cartId]);
     $orderHistory = $db->query("SELECT * FROM orders ORDER BY created_at DESC LIMIT 5");
 
@@ -167,7 +171,16 @@ try {
                             <div class="bg-slate-200 h-40 flex items-center justify-center text-slate-400 text-xs font-mono font-bold">Product Asset</div>
                             <div class="p-4 flex-1 flex flex-col justify-between">
                                 <div>
-                                    <h3 class="font-bold text-gray-800 text-md"><?= htmlspecialchars($prod['name']) ?></h3>
+                                    <div class="flex justify-between items-start">
+                                        <h3 class="font-bold text-gray-800 text-md"><?= htmlspecialchars($prod['name']) ?></h3>
+                                        <?php if (isset($prod['stock_quantity'])): ?>
+                                            <?php if ($prod['stock_quantity'] > 0): ?>
+                                                <span class="bg-blue-50 text-blue-700 text-xs font-semibold px-2 py-0.5 rounded border border-blue-100">Stock: <?= $prod['stock_quantity'] ?></span>
+                                            <?php else: ?>
+                                                <span class="bg-red-50 text-red-700 text-xs font-semibold px-2 py-0.5 rounded border border-red-100">Out of Stock</span>
+                                            <?php endif; ?>
+                                        <?php endif; ?>
+                                    </div>
                                     <p class="text-xs text-gray-500 mt-1"><?= htmlspecialchars($prod['description']) ?></p>
                                 </div>
                                 <div class="flex justify-between items-center mt-4">
@@ -175,7 +188,11 @@ try {
                                     <form method="POST">
                                         <input type="hidden" name="action" value="add_to_cart">
                                         <input type="hidden" name="product_id" value="<?= $prod['id'] ?>">
-                                        <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-3 py-2 rounded-md cursor-pointer">+ Add to Cart</button>
+                                        <?php if (!isset($prod['stock_quantity']) || $prod['stock_quantity'] > 0): ?>
+                                            <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-3 py-2 rounded-md cursor-pointer">+ Add to Cart</button>
+                                        <?php else: ?>
+                                            <button type="button" class="bg-gray-200 text-gray-400 text-xs font-semibold px-3 py-2 rounded-md cursor-not-allowed" disabled>Sold Out</button>
+                                        <?php endif; ?>
                                     </form>
                                 </div>
                             </div>
@@ -184,15 +201,51 @@ try {
                 </div>
             </div>
 
-            <!-- Shopping Basket UI Table component -->
-            <div class="bg-white p-6 rounded-xl shadow-xs border border-gray-200 h-fit">
-                <div class="flex justify-between items-center mb-4">
-                    <h2 class="text-lg font-bold text-gray-700">🛒 Shopping Cart</h2>
+            <!-- Sidebar -->
+            <div class="space-y-6">
+                <!-- Shopping Cart Widget -->
+                <div class="bg-white rounded-xl shadow-xs border border-gray-200 p-4">
+                    <h3 class="font-bold text-gray-800 mb-4 uppercase text-sm">🛒 Shopping Cart</h3>
                     <?php if (!empty($cartRows)): ?>
-                        <form method="POST"><input type="hidden" name="action" value="clear_cart"><button type="submit" class="text-xs text-red-500 hover:underline cursor-pointer font-bold">Clear All</button></form>
+                        <div class="space-y-2 mb-4 max-h-64 overflow-y-auto">
+                            <?php foreach ($cartRows as $item): ?>
+                                <div class="flex justify-between items-center text-xs bg-gray-50 p-2 rounded">
+                                    <span class="font-medium"><?= htmlspecialchars($item['name']) ?></span>
+                                    <span class="text-gray-500">×<?= $item['quantity'] ?></span>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                        <form method="POST" class="space-y-2">
+                            <input type="hidden" name="action" value="checkout_cart">
+                            <button type="submit" class="w-full bg-green-600 hover:bg-green-700 text-white text-xs font-semibold py-2 rounded-md cursor-pointer">🔗 Proceed to Stripe</button>
+                        </form>
+                        <form method="POST">
+                            <input type="hidden" name="action" value="clear_cart">
+                            <button type="submit" class="w-full bg-red-50 hover:bg-red-100 text-red-600 text-xs font-semibold py-2 rounded-md cursor-pointer mt-2">Clear Cart</button>
+                        </form>
+                    <?php else: ?>
+                        <p class="text-xs text-gray-500 text-center py-4">Cart is empty</p>
                     <?php endif; ?>
                 </div>
-                <div class="border border-gray-100 rounded-lg overflow-hidden mb-4">
-                    <table class="w-full text-left border-collapse text-xs">
-                        <thead>
-                            <tr class="bg-gray-50 text-gray-600 font-bold border-b border-gray-100"><th class="p-3">Item Description</th><th class="p-3 text-center">Qty</th><th class="p-3 text-right">Subtotal</th></tr>
+
+                <!-- Order History Widget -->
+                <div class="bg-white rounded-xl shadow-xs border border-gray-200 p-4">
+                    <h3 class="font-bold text-gray-800 mb-4 uppercase text-sm">📋 Recent Orders</h3>
+                    <?php if (!empty($orderHistory)): ?>
+                        <div class="space-y-2 max-h-64 overflow-y-auto">
+                            <?php foreach ($orderHistory as $order): ?>
+                                <div class="text-xs bg-gray-50 p-2 rounded">
+                                    <div class="font-medium">Order #<?= $order['id'] ?></div>
+                                    <div class="text-gray-500"><?= htmlspecialchars($order['created_at']) ?></div>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php else: ?>
+                        <p class="text-xs text-gray-500 text-center py-4">No orders yet</p>
+                    <?php endif; ?>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
