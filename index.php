@@ -1,9 +1,4 @@
 <?php
-// Force XAMPP to show errors instead of a blank screen
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
-error_reporting(E_ALL);
-
 session_start();
 
 require __DIR__ . '/vendor/autoload.php';
@@ -29,10 +24,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $inputUser = $_POST['username'] ?? '';
     $inputPass = $_POST['password'] ?? '';
     
-    $envUser = 'admin';
-    $envPass = 'SecretWyckie2026';
-
-    if ($inputUser === $envUser && $inputPass === $envPass) {
+    if ($inputUser === 'admin' && $inputPass === 'SecretWyckie2026') {
         $_SESSION['authenticated'] = true;
         header("Location: index.php");
         exit;
@@ -42,7 +34,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 }
 
 // Intercept unauthorized requests
-if (!isset($_SESSION['authenticated']) || $_SESSION['authenticated'] !== true) {
+if (!isset($_SESSION['authenticated']) || $_SESSION['authenticated'] !== true):
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -71,16 +63,17 @@ if (!isset($_SESSION['authenticated']) || $_SESSION['authenticated'] !== true) {
 </body>
 </html>
 <?php 
-    exit; 
-}
+exit; 
+endif;
 
-// --- AUTHENTICATED STATE ---
+// --- AUTHENTICATED STATE RUNTIME ---
 if (!isset($_COOKIE['shop_session'])) {
     $sessionToken = bin2hex(random_bytes(16));
     setcookie('shop_session', $sessionToken, time() + (86400 * 30), "/");
     $_COOKIE['shop_session'] = $sessionToken;
+} else {
+    $sessionToken = $_COOKIE['shop_session'];
 }
-$sessionToken = $_COOKIE['shop_session'];
 
 try {
     $db = new Database($_ENV['DB_HOST'] ?? '127.0.0.1', $_ENV['DB_NAME'] ?? 'ecommerce_db', $_ENV['DB_USER'] ?? 'root', $_ENV['DB_PASS'] ?? '');
@@ -93,64 +86,28 @@ try {
         $cartCheckQuery = $db->query("SELECT id FROM carts WHERE session_id = ? LIMIT 1", [$sessionToken]);
     }
     
-    // Check array type layout format mapping
+    // Normalize row extract
     $cartId = isset($cartCheckQuery[0]['id']) ? $cartCheckQuery[0]['id'] : (isset($cartCheckQuery['id']) ? $cartCheckQuery['id'] : 1);
 
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         
         if ($_POST['action'] === 'add_to_cart') {
             $productId = intval($_POST['product_id']);
-            $itemCheck = $db->query("SELECT id, quantity FROM cart_items WHERE cart_id = ? AND product_id = ?", [$cartId, $productId]);
-            $checkRow = !empty($itemCheck) ? (isset($itemCheck[0]) ? $itemCheck[0] : $itemCheck) : [];
-            if (!empty($checkRow)) {
-                $db->query("UPDATE cart_items SET quantity = quantity + 1 WHERE id = ?", [$checkRow['id']]);
+            $itemCheck = $db->query("SELECT id, quantity FROM cart_items WHERE cart_id = ? AND product_id = ? LIMIT 1", [$cartId, $productId]);
+            
+            if (!empty($itemCheck)) {
+                $row = isset($itemCheck[0]) ? $itemCheck[0] : $itemCheck;
+                $newQty = $row['quantity'] + 1;
+                $db->query("UPDATE cart_items SET quantity = ? WHERE id = ?", [$newQty, $row['id']]);
             } else {
                 $db->query("INSERT INTO cart_items (cart_id, product_id, quantity) VALUES (?, ?, 1)", [$cartId, $productId]);
             }
-            $message = "🛒 Item added to your secure cart ledger.";
+            $message = "🛒 Item added successfully!";
         }
 
         if ($_POST['action'] === 'clear_cart') {
             $db->query("DELETE FROM cart_items WHERE cart_id = ?", [$cartId]);
             $message = "🗑️ Shopping cart cleared.";
-        }
-
-        if ($_POST['action'] === 'create_product') {
-            $name = $_POST['p_name'];
-            $desc = $_POST['p_desc'];
-            $price = floatval($_POST['p_price']);
-            $db->query("INSERT INTO products (name, description, price, image_path) VALUES (?, ?, ?, 'https://placehold.co')", [$name, $desc, $price]);
-            $message = "🚀 New product added to catalog successfully!";
-        }
-
-        if ($_POST['action'] === 'update_product') {
-            $id = intval($_POST['p_id']);
-            $name = $_POST['p_name'];
-            $desc = $_POST['p_desc'];
-            $price = floatval($_POST['p_price']);
-            $db->query("UPDATE products SET name = ?, description = ?, price = ? WHERE id = ?", [$name, $desc, $price, $id]);
-            $message = "✅ Product details updated successfully inside MySQL!";
-        }
-
-        if ($_POST['action'] === 'delete_product') {
-            $id = intval($_POST['p_id']);
-            $db->query("DELETE FROM products WHERE id = ?", [$id]);
-            $message = "❌ Product removed from catalog.";
-        }
-
-        if ($_POST['action'] === 'export_cart_excel') {
-            $liveCartItems = $db->query("SELECT p.name, ci.quantity, (p.price * ci.quantity) as total FROM cart_items ci JOIN products p ON ci.product_id = p.id WHERE ci.cart_id = ?", [$cartId]);
-            if (!empty($liveCartItems)) {
-                require_once __DIR__ . '/ReportGenerator.php';
-                $report = new \Wyckie\EcommercePlatform\ReportGenerator();
-                $exportData = [];
-                foreach ($liveCartItems as $index => $item) {
-                    $exportData[] = ['id' => 'ITEM-' . ($index + 1), 'email' => 'Secure Ledger', 'total' => $item['total'], 'status' => $item['name'] . ' (Qty: ' . $item['quantity'] . ')'];
-                }
-                $filePath = __DIR__ . '/live_cart_manifest_' . time() . '.xlsx';
-                $report->exportSalesReport($filePath, $exportData);
-                $message = "📊 Live cart compiled successfully: " . basename($filePath);
-            }
         }
 
         if ($_POST['action'] === 'checkout_cart') {
@@ -169,44 +126,73 @@ try {
     }
 
     $products = $db->query("SELECT * FROM products");
+    
+    // Explicitly select the exact multi-item fields for clean tabular rendering
     $cartRows = $db->query("SELECT ci.id, ci.quantity, p.name, p.price FROM cart_items ci JOIN products p ON ci.product_id = p.id WHERE ci.cart_id = ?", [$cartId]);
     $orderHistory = $db->query("SELECT * FROM orders ORDER BY created_at DESC LIMIT 5");
 
 } catch (\Exception $e) {
-    die("Error Exception Caught: " . $e->getMessage());
+    die("Critical Error: " . $e->getMessage());
 }
-
-$viewMode = $_GET['view'] ?? 'store'; 
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Wyckie Enterprise Suite</title>
     <script src="https://jsdelivr.net"></script>
 </head>
-<body class="bg-gray-100 font-sans">
+<body class="bg-gray-100 font-sans text-gray-800">
     <div class="max-w-7xl mx-auto px-4 py-8">
         
-        <!-- Header Bar -->
         <header class="mb-8 border-b border-gray-200 pb-4 flex justify-between items-center bg-white p-4 rounded-xl shadow-xs">
             <div>
                 <h1 class="text-3xl font-black text-slate-800">Wyckie Engine</h1>
-                <p class="text-xs text-slate-500 font-medium mt-0.5">Dual-Mode Administrative Commerce Core</p>
+                <p class="text-xs text-slate-500 font-medium mt-0.5">Administrative Commerce Dashboard</p>
             </div>
-            <div class="flex items-center space-x-2">
-                <a href="index.php?view=store" class="px-4 py-2 text-xs font-bold rounded-lg transition-colors <?= $viewMode==='store' ? 'bg-indigo-600 text-white':'bg-gray-100 text-gray-700 hover:bg-gray-200'?>">🛒 Customer Storefront</a>
-                <a href="index.php?view=admin" class="px-4 py-2 text-xs font-bold rounded-lg transition-colors <?= $viewMode==='admin' ? 'bg-amber-600 text-white':'bg-gray-100 text-gray-700 hover:bg-gray-200'?>">⚙️ Product Inventory Manager</a>
-                <a href="index.php?action=logout" class="text-xs font-bold text-red-500 bg-red-50 px-3 py-2 rounded-lg hover:bg-red-100">Sign Out</a>
-            </div>
+            <a href="index.php?action=logout" class="text-xs font-bold text-red-500 bg-red-50 px-3 py-2 rounded-lg hover:bg-red-100">Sign Out</a>
         </header>
 
-        <!-- Alerts -->
         <?php if (!empty($message)): ?>
-            <div class="mb-6 p-4 bg-blue-50 border-l-4 border-blue-500 text-blue-700 rounded-r shadow-xs font-semibold text-sm">
-                <?= htmlspecialchars($message) ?>
-            </div>
+            <div class="mb-6 p-4 bg-blue-50 border-l-4 border-blue-500 text-blue-700 rounded-r text-sm font-semibold"><?= htmlspecialchars($message) ?></div>
         <?php endif; ?>
 
-        <!-- ================= STORE VIEW ================= -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- Catalog Layout -->
+            <div class="lg:col-span-2 space-y-6">
+                <h2 class="text-xl font-bold text-gray-700 uppercase">🛍️ Showroom Catalogue</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <?php foreach ($products as $prod): ?>
+                        <div class="bg-white rounded-xl shadow-xs border border-gray-200 overflow-hidden flex flex-col justify-between">
+                            <div class="bg-slate-200 h-40 flex items-center justify-center text-slate-400 text-xs font-mono font-bold">Product Asset</div>
+                            <div class="p-4 flex-1 flex flex-col justify-between">
+                                <div>
+                                    <h3 class="font-bold text-gray-800 text-md"><?= htmlspecialchars($prod['name']) ?></h3>
+                                    <p class="text-xs text-gray-500 mt-1"><?= htmlspecialchars($prod['description']) ?></p>
+                                </div>
+                                <div class="flex justify-between items-center mt-4">
+                                    <span class="text-lg font-extrabold text-gray-900">$<?= number_format($prod['price'], 2) ?></span>
+                                    <form method="POST">
+                                        <input type="hidden" name="action" value="add_to_cart">
+                                        <input type="hidden" name="product_id" value="<?= $prod['id'] ?>">
+                                        <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-3 py-2 rounded-md cursor-pointer">+ Add to Cart</button>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+
+            <!-- Shopping Basket UI Table component -->
+            <div class="bg-white p-6 rounded-xl shadow-xs border border-gray-200 h-fit">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-lg font-bold text-gray-700">🛒 Shopping Cart</h2>
+                    <?php if (!empty($cartRows)): ?>
+                        <form method="POST"><input type="hidden" name="action" value="clear_cart"><button type="submit" class="text-xs text-red-500 hover:underline cursor-pointer font-bold">Clear All</button></form>
+                    <?php endif; ?>
+                </div>
+                <div class="border border-gray-100 rounded-lg overflow-hidden mb-4">
+                    <table class="w-full text-left border-collapse text-xs">
+                        <thead>
+                            <tr class="bg-gray-50 text-gray-600 font-bold border-b border-gray-100"><th class="p-3">Item Description</th><th class="p-3 text-center">Qty</th><th class="p-3 text-right">Subtotal</th></tr>
