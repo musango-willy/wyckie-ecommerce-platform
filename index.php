@@ -1,80 +1,20 @@
 <?php
-// Force error displaying for seamless troubleshooting
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
-session_start();
-
-require __DIR__ . '/vendor/autoload.php';
-
-$dotenv = Dotenv\Dotenv::createImmutable(__DIR__);
-$dotenv->safeLoad();
-
-use Wyckie\EcommercePlatform\PaymentGateway;
+// --- COMPOSER ENGINE & ROUTING INITIALIZATION ---
+require_once __DIR__ . '/vendor/autoload.php';
+require_once __DIR__ . '/Database.php';
 use Wyckie\EcommercePlatform\Database;
 
-$message = '';
-$checkoutUrl = '';
-$products = [];
-$cartRows = [];
-$orderHistory = [];
-
-// Handle Admin Logout Action
-if (isset($_GET['action']) && $_GET['action'] === 'logout') {
-    session_destroy();
-    header("Location: index.php");
-    exit;
+// Safe dotenv package layer registration
+if (file_exists(__DIR__ . '/.env')) {
+    $dotenv = Dotenv\Dotenv::createImmutable(__DIR__);
+    $dotenv->safeLoad();
 }
 
-// Handle Form Login Action
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'login') {
-    $inputUser = $_POST['username'] ?? '';
-    $inputPass = $_POST['password'] ?? '';
-    
-    if ($inputUser === 'admin' && $inputPass === 'SecretWyckie2026') {
-        $_SESSION['authenticated'] = true;
-        header("Location: index.php");
-        exit;
-    } else {
-        $message = "❌ Invalid administrative username or password combination.";
-    }
-}
-
-// Intercept unauthorized requests
-if (!isset($_SESSION['authenticated']) || $_SESSION['authenticated'] !== true):
-?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Wyckie Gateway Security</title>
-    <script src="https://jsdelivr.net"></script>
-</head>
-<body class="bg-slate-900 flex items-center justify-center min-h-screen font-sans">
-    <div class="max-w-md w-full mx-4 bg-white p-8 rounded-xl shadow-2xl">
-        <h1 class="text-2xl font-black text-center text-slate-800 mb-6">Wyckie Core Security</h1>
-        <?php if (!empty($message)): ?><div class="mb-4 p-3 bg-red-50 text-red-700 text-xs"><?= htmlspecialchars($message) ?></div><?php endif; ?>
-        <form method="POST" class="space-y-4">
-            <input type="hidden" name="action" value="login">
-            <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Username</label>
-                <input type="text" name="username" class="w-full p-2.5 border rounded-md" required>
-            </div>
-            <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Password</label>
-                <input type="password" name="password" class="w-full p-2.5 border rounded-md" required>
-            </div>
-            <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-md cursor-pointer">Unlock Desk</button>
-        </form>
-    </div>
-</body>
-</html>
-<?php 
-exit; 
-endif;
-
-// --- AUTHENTICATED STATE RUNTIME ---
+// Ensure an active session cookie tracks individual cart allocations
 if (!isset($_COOKIE['shop_session'])) {
     $sessionToken = bin2hex(random_bytes(16));
     setcookie('shop_session', $sessionToken, time() + (86400 * 30), "/");
@@ -83,169 +23,288 @@ if (!isset($_COOKIE['shop_session'])) {
     $sessionToken = $_COOKIE['shop_session'];
 }
 
-try {
-    $db = new Database($_ENV['DB_HOST'] ?? '127.0.0.1', $_ENV['DB_NAME'] ?? 'ecommerce_db', $_ENV['DB_USER'] ?? 'root', $_ENV['DB_PASS'] ?? '');
-    $stripeKey = $_ENV['STRIPE_SECRET_KEY'] ?? 'sk_test_fallback'; 
-    $payment = new PaymentGateway($stripeKey);
+$message = "";
 
+try {
+    // Dynamic database connector instantiation
+    $db = new Database(
+        $_ENV['DB_HOST'] ?? '127.0.0.1', 
+        $_ENV['DB_NAME'] ?? 'ecommerce_db', 
+        $_ENV['DB_USER'] ?? 'root', 
+        $_ENV['DB_PASS'] ?? ''
+    );
+    
+    $stripeKey = $_ENV['STRIPE_SECRET_KEY'] ?? 'sk_test_fallback';
+    
+    // Resolve user's relational cart record index
     $cartCheckQuery = $db->query("SELECT id FROM carts WHERE session_id = ? LIMIT 1", [$sessionToken]);
     if (empty($cartCheckQuery)) {
         $db->query("INSERT INTO carts (session_id) VALUES (?)", [$sessionToken]);
         $cartCheckQuery = $db->query("SELECT id FROM carts WHERE session_id = ? LIMIT 1", [$sessionToken]);
     }
     
-    $cartId = isset($cartCheckQuery['id']) ? $cartCheckQuery['id'] : (isset($cartCheckQuery['id']) ? $cartCheckQuery['id'] : 1);
+    // Safety fallback handling array un-nesting structure variations
+    $cartId = isset($cartCheckQuery[0]['id']) ? $cartCheckQuery[0]['id'] : (isset($cartCheckQuery['id']) ? $cartCheckQuery['id'] : 1);
 
+    // --- FORM SUBMISSION PROCESSING ACTION ROUTER ---
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-        
-        if ($_POST['action'] === 'add_to_cart') {
-            $productId = intval($_POST['product_id']);
-            $itemCheck = $db->query("SELECT id, quantity FROM cart_items WHERE cart_id = ? AND product_id = ? LIMIT 1", [$cartId, $productId]);
-            
-            if (!empty($itemCheck)) {
-                $row = isset($itemCheck) ? $itemCheck : $itemCheck;
-                $db->query("UPDATE cart_items SET quantity = quantity + 1 WHERE id = ?", [$row['id']]);
-            } else {
-                $db->query("INSERT INTO cart_items (cart_id, product_id, quantity) VALUES (?, ?, 1)", [$cartId, $productId]);
-            }
-            $message = "🛒 Item added successfully!";
-        }
+        $action = $_POST['action'];
 
-        if ($_POST['action'] === 'clear_cart') {
+        // 1. Clear Active Cart Items
+        if ($action === 'clear_cart') {
             $db->query("DELETE FROM cart_items WHERE cart_id = ?", [$cartId]);
-            $message = "🗑️ Shopping cart cleared.";
+            $message = "🗑️ Your shopping cart has been cleared.";
         }
 
-        if ($_POST['action'] === 'checkout_cart') {
-            $currentCartItems = $db->query("SELECT ci.quantity, p.name, p.price FROM cart_items ci JOIN products p ON ci.product_id = p.id WHERE ci.cart_id = ?", [$cartId]);
-            if (!empty($currentCartItems)) {
-                $stripeLineItems = [];
-                foreach ($currentCartItems as $item) {
-                    $stripeLineItems[] = [
-                        'price_data' => ['currency' => 'usd', 'product_data' => ['name' => $item['name']], 'unit_amount' => intval($item['price'] * 100)],
+        // 2. Stripe Secure Session Checkout Redirection
+        if ($action === 'checkout_stripe') {
+            $cartItems = $db->query("SELECT c.quantity, p.name, p.price FROM cart_items c JOIN products p ON c.product_id = p.id WHERE c.cart_id = ?", [$cartId]);
+            
+            if (!empty($cartItems)) {
+                $lineItems = [];
+                foreach ($cartItems as $item) {
+                    $lineItems[] = [
+                        'price_data' => [
+                            'currency' => 'usd',
+                            'product_data' => ['name' => $item['name']],
+                            'unit_amount' => intval($item['price'] * 100), // Converted to cents
+                        ],
                         'quantity' => intval($item['quantity']),
                     ];
                 }
-                $checkoutUrl = $payment->createCartCheckoutSession($stripeLineItems, 'http://localhost/ecommerce/index.php?status=success', 'http://localhost/ecommerce/index.php?status=cancel');
+
+                try {
+                    \Stripe\Stripe::setApiKey($stripeKey);
+                    $session = \Stripe\Checkout\Session::create([
+                        'payment_method_types' => ['card'],
+                        'line_items' => $lineItems,
+                        'mode' => 'payment',
+                        'success_url' => 'http://localhost/ecommerce/index.php?session_id={CHECKOUT_SESSION_ID}',
+                        'cancel_url' => 'http://localhost/ecommerce/index.php',
+                    ]);
+                    
+                    // Flush items immediately out of basket database logs upon setup completion
+                    $db->query("DELETE FROM cart_items WHERE cart_id = ?", [$cartId]);
+                    
+                    header("Location: " . $session->url);
+                    exit();
+                } catch (\Exception $e) {
+                    $message = "❌ Stripe Gateway Error: " . $e->getMessage();
+                }
+            } else {
+                $message = "⚠️ Your shopping cart is empty. Cannot initialize checkout session.";
             }
+        }
+
+        // 3. Add Item into Basket Logic
+        if ($action === 'add_to_cart') {
+            $productId = isset($_POST['product_id']) ? intval($_POST['product_id']) : (isset($_POST['id']) ? intval($_POST['id']) : 0);
+            
+            if ($productId > 0) {
+                $itemCheck = $db->query("SELECT id, quantity FROM cart_items WHERE cart_id = ? AND product_id = ? LIMIT 1", [$cartId, $productId]);
+                
+                if (!empty($itemCheck)) {
+                    $row = $itemCheck[0] ?? $itemCheck;
+                    if (isset($row['id'])) {
+                        $db->query("UPDATE cart_items SET quantity = quantity + 1 WHERE id = ?", [$row['id']]);
+                    }
+                } else {
+                    $db->query("INSERT INTO cart_items (cart_id, product_id, quantity) VALUES (?, ?, 1)", [$cartId, $productId]);
+                }
+                $message = "🛒 Item added successfully!";
+            }
+        }
+
+        // 4. Handle Manual Product Creation
+        if ($action === 'create_product') {
+            $name = htmlspecialchars($_POST['name']);
+            $description = htmlspecialchars($_POST['description']);
+            $price = floatval($_POST['price']);
+            $stock = intval($_POST['stock']);
+            
+            $db->query("INSERT INTO products (name, description, price, stock) VALUES (?, ?, ?, ?)", [$name, $description, $price, $stock]);
+            $message = "✨ New product added to showroom!";
+        }
+
+        // 5. Bulk Generate 50 Assorted Inventory Items Seeder
+        if ($action === 'seed_50_items') {
+            $categories = ['Electronics', 'Apparel', 'Home Goods', 'Fitness'];
+            $nouns = ['Pro', 'Max', 'Ultra', 'Classic', 'Elite', 'Eco', 'Smart'];
+            
+            for ($i = 1; $i <= 50; $i++) {
+                $cat = $categories[$i % 4];
+                $noun = $nouns[$i % 7];
+                $name = $cat . " " . $noun . " Item #" . $i;
+                $description = "Premium grade asset from our " . $cat . " collection. Built for durability and high-performance metrics.";
+                $price = rand(15, 299) + 0.99;
+                $stock = rand(5, 40);
+                
+                $db->query("INSERT INTO products (name, description, price, stock) VALUES (?, ?, ?, ?)", [$name, $description, $price, $stock]);
+            }
+            $message = "🚀 Successfully injected 50 assorted showroom items!";
         }
     }
 
-    $products = $db->query("SELECT * FROM products");
-    $cartRows = $db->query("SELECT ci.id, ci.quantity, p.name, p.price FROM cart_items ci JOIN products p ON ci.product_id = p.id WHERE ci.cart_id = ?", [$cartId]);
-    $orderHistory = $db->query("SELECT * FROM orders ORDER BY created_at DESC LIMIT 5");
+    // --- STRIPE RETURN REDIRECT TRANSACTION CAPTURE LOG ---
+    if (isset($_GET['session_id'])) {
+        $stripeSessionId = htmlspecialchars($_GET['session_id']);
+        $existingOrder = $db->query("SELECT id FROM orders WHERE stripe_session_id = ? LIMIT 1", [$stripeSessionId]);
+        
+        if (empty($existingOrder)) {
+            $db->query("INSERT INTO orders (stripe_session_id, created_at) VALUES (?, NOW())", [$stripeSessionId]);
+            $message = "🎉 Payment Successful! Your order has been placed logged into history.";
+        }
+    }
+
+    // --- DATA DISPLAY RETRIEVAL QUERIES ---
+    $products = $db->query("SELECT id, name, description, price, stock FROM products ORDER BY id DESC");
+    $orderHistory = $db->query("SELECT id, created_at FROM orders ORDER BY id DESC LIMIT 10");
 
 } catch (\Exception $e) {
-    die("Critical Error: " . $e->getMessage());
+    die("Critical Application Error: " . $e->getMessage());
 }
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Wyckie Enterprise Suite</title>
-    <script src="https://jsdelivr.net"></script>
+    <title>Wyckie Engine Dashboard</title>
 </head>
-<body class="bg-gray-100 font-sans text-gray-800">
-    <div class="max-w-7xl mx-auto px-4 py-8">
-        
-        <header class="mb-8 border-b border-gray-200 pb-4 flex justify-between items-center bg-white p-4 rounded-xl shadow-xs">
-            <div>
-                <h1 class="text-3xl font-black text-slate-800">Wyckie Engine</h1>
-                <p class="text-xs text-slate-500 font-medium mt-0.5">Administrative Commerce Dashboard</p>
-            </div>
-            <a href="index.php?action=logout" class="text-xs font-bold text-red-500 bg-red-50 px-3 py-2 rounded-lg hover:bg-red-100">Sign Out</a>
-        </header>
+<body style="background: #f1f5f9; color: #1e293b; font-family: sans-serif; padding: 40px; margin: 0;">
 
+    <div style="max-width: 1200px; margin: 0 auto;">
+        
+        <!-- Header Brand Layout -->
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #cbd5e1; padding-bottom: 20px; margin-bottom: 30px;">
+            <div>
+                <h1 style="margin: 0; color: #0f172a; font-size: 28px;">Wyckie Engine</h1>
+                <p style="margin: 5px 0 0 0; color: #64748b; font-weight: 500;">Administrative Commerce Dashboard</p>
+            </div>
+            <a href="?signout=1" style="background: #ef4444; color: white; text-decoration: none; padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 14px;">Sign Out</a>
+        </div>
+
+        <!-- Dynamic Success Status Notice Banner -->
         <?php if (!empty($message)): ?>
-            <div class="mb-6 p-4 bg-blue-50 border-l-4 border-blue-500 text-blue-700 rounded-r text-sm font-semibold"><?= htmlspecialchars($message) ?></div>
+            <div style="background: #ecfdf5; border: 1px solid #10b981; color: #065f46; padding: 16px; border-radius: 8px; margin: 20px 0; font-weight: bold; font-size: 15px;">
+                <?= $message; ?>
+            </div>
         <?php endif; ?>
 
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <!-- Catalog Layout -->
-            <div class="lg:col-span-2 space-y-6">
-                <h2 class="text-xl font-bold text-gray-700 uppercase">🛍️ Showroom Catalogue</h2>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <?php foreach ($products as $prod): ?>
-                        <div class="bg-white rounded-xl shadow-xs border border-gray-200 overflow-hidden flex flex-col justify-between">
-                            <div class="bg-slate-200 h-40 flex items-center justify-center text-slate-400 text-xs font-mono font-bold">Product Asset</div>
-                            <div class="p-4 flex-1 flex flex-col justify-between">
+        <!-- Split Grid Columns Layout -->
+               <!-- Split Grid Columns Layout -->
+        <div style="display: grid; grid-template-columns: 1fr 400px; gap: 40px; align-items: start;">
+            
+            <!-- LEFT MAIN WORKSPACE COLUMN -->
+            <div>
+                <!-- Inventory Controls Element Component Card -->
+                <div style="background: white; border: 1px solid #e2e8f0; padding: 24px; border-radius: 12px; margin-bottom: 40px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+                    <h3 style="margin-top: 0; color: #0f172a; font-size: 18px; margin-bottom: 16px;">🛠️ Inventory Management Controls</h3>
+                    
+                    <form method="POST" style="display: grid; gap: 12px; max-width: 500px; margin-bottom: 20px;">
+                        <input type="hidden" name="action" value="create_product">
+                        <input type="text" name="name" placeholder="Product Title (e.g. Mechanical Keyboard)" required style="padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px;">
+                        <textarea name="description" placeholder="Product Description..." required style="padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: sans-serif; font-size: 14px; height: 70px; resize: vertical;"></textarea>
+                        <div style="display: flex; gap: 10px;">
+                            <input type="number" step="0.01" name="price" placeholder="Price ($)" required style="flex: 1; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px;">
+                            <input type="number" name="stock" placeholder="Initial Stock" required style="flex: 1; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px;">
+                        </div>
+                        <button type="submit" style="background: #2563eb; color: white; border: none; padding: 12px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 14px; width: 100%;">➕ Publish Product</button>
+                    </form>
+
+                    <form method="POST" style="margin: 0;">
+                        <input type="hidden" name="action" value="seed_50_items">
+                        <button type="submit" style="background: #10b981; color: white; border: none; padding: 12px 18px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 14px;">⚡ Auto-Generate 50 Assorted Inventory Items</button>
+                    </form>
+                </div>
+
+                <!-- Showroom Catalogue Visual Interface Grid -->
+                <h2 style="color: #0f172a; margin: 0 0 20px 0; font-size: 22px; display: flex; align-items: center; gap: 8px;">🛍️ Showroom Catalogue</h2>
+                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 20px;">
+                    <?php if (!empty($products)): ?>
+                        <?php foreach ($products as $product): 
+                            $prodId = $product['id'] ?? 0;
+                            $prodStock = intval($product['stock'] ?? 0);
+                        ?>
+                            <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.02); display: flex; flex-direction: column; justify-content: space-between; min-height: 250px;">
                                 <div>
-                                    <div class="flex justify-between items-start">
-                                        <h3 class="font-bold text-gray-800 text-md"><?= htmlspecialchars($prod['name']) ?></h3>
-                                        <?php if (isset($prod['stock_quantity'])): ?>
-                                            <?php if ($prod['stock_quantity'] > 0): ?>
-                                                <span class="bg-blue-50 text-blue-700 text-xs font-semibold px-2 py-0.5 rounded border border-blue-100">Stock: <?= $prod['stock_quantity'] ?></span>
-                                            <?php else: ?>
-                                                <span class="bg-red-50 text-red-700 text-xs font-semibold px-2 py-0.5 rounded border border-red-100">Out of Stock</span>
-                                            <?php endif; ?>
-                                        <?php endif; ?>
-                                    </div>
-                                    <p class="text-xs text-gray-500 mt-1"><?= htmlspecialchars($prod['description']) ?></p>
+                                    <span style="background: #f1f5f9; color: #475569; font-size: 10px; padding: 3px 6px; border-radius: 4px; font-weight: bold; text-transform: uppercase;">Product Asset</span>
+                                    <h3 style="margin: 10px 0 6px 0; color: #0f172a; font-size: 16px; font-weight: bold;"><?= htmlspecialchars($product['name'] ?? 'Asset Item') ?></h3>
+                                    <p style="color: #64748b; font-size: 13px; margin: 0 0 12px 0; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;"><?= htmlspecialchars($product['description'] ?? '') ?></p>
                                 </div>
-                                <div class="flex justify-between items-center mt-4">
-                                    <span class="text-lg font-extrabold text-gray-900">$<?= number_format($prod['price'], 2) ?></span>
-                                    <form method="POST">
+                                
+                                <div>
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                                        <span style="font-size: 18px; font-weight: 700; color: #0f172a;">$<?= number_format($product['price'] ?? 0, 2) ?></span>
+                                        <span style="font-size: 12px; color: <?= $prodStock > 0 ? '#16a34a' : '#dc2626' ?>; font-weight: 600;">Stock: <?= $prodStock ?></span>
+                                    </div>
+                                    
+                                    <form action="index.php" method="POST" style="margin: 0;">
                                         <input type="hidden" name="action" value="add_to_cart">
-                                        <input type="hidden" name="product_id" value="<?= $prod['id'] ?>">
-                                        <?php if (!isset($prod['stock_quantity']) || $prod['stock_quantity'] > 0): ?>
-                                            <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-3 py-2 rounded-md cursor-pointer">+ Add to Cart</button>
-                                        <?php else: ?>
-                                            <button type="button" class="bg-gray-200 text-gray-400 text-xs font-semibold px-3 py-2 rounded-md cursor-not-allowed" disabled>Sold Out</button>
-                                        <?php endif; ?>
+                                        <input type="hidden" name="product_id" value="<?= $prodId ?>">
+                                        <button type="submit" <?= $prodStock <= 0 ? 'disabled' : '' ?> style="width: 100%; background: #2563eb; color: white; border: none; padding: 9px; border-radius: 6px; font-weight: bold; font-size: 13px; cursor: pointer; opacity: <?= $prodStock <= 0 ? '0.5' : '1' ?>;">
+                                            <?= $prodStock > 0 ? '➕ Add to Cart' : '🚫 Out of Stock' ?>
+                                        </button>
                                     </form>
                                 </div>
                             </div>
-                        </div>
-                    <?php endforeach; ?>
-                </div>
-            </div>
-
-            <!-- Sidebar -->
-            <div class="space-y-6">
-                <!-- Shopping Cart Widget -->
-                <div class="bg-white rounded-xl shadow-xs border border-gray-200 p-4">
-                    <h3 class="font-bold text-gray-800 mb-4 uppercase text-sm">🛒 Shopping Cart</h3>
-                    <?php if (!empty($cartRows)): ?>
-                        <div class="space-y-2 mb-4 max-h-64 overflow-y-auto">
-                            <?php foreach ($cartRows as $item): ?>
-                                <div class="flex justify-between items-center text-xs bg-gray-50 p-2 rounded">
-                                    <span class="font-medium"><?= htmlspecialchars($item['name']) ?></span>
-                                    <span class="text-gray-500">×<?= $item['quantity'] ?></span>
-                                </div>
-                            <?php endforeach; ?>
-                        </div>
-                        <form method="POST" class="space-y-2">
-                            <input type="hidden" name="action" value="checkout_cart">
-                            <button type="submit" class="w-full bg-green-600 hover:bg-green-700 text-white text-xs font-semibold py-2 rounded-md cursor-pointer">🔗 Proceed to Stripe</button>
-                        </form>
-                        <form method="POST">
-                            <input type="hidden" name="action" value="clear_cart">
-                            <button type="submit" class="w-full bg-red-50 hover:bg-red-100 text-red-600 text-xs font-semibold py-2 rounded-md cursor-pointer mt-2">Clear Cart</button>
-                        </form>
+                        <?php endforeach; ?>
                     <?php else: ?>
-                        <p class="text-xs text-gray-500 text-center py-4">Cart is empty</p>
-                    <?php endif; ?>
-                </div>
-
-                <!-- Order History Widget -->
-                <div class="bg-white rounded-xl shadow-xs border border-gray-200 p-4">
-                    <h3 class="font-bold text-gray-800 mb-4 uppercase text-sm">📋 Recent Orders</h3>
-                    <?php if (!empty($orderHistory)): ?>
-                        <div class="space-y-2 max-h-64 overflow-y-auto">
-                            <?php foreach ($orderHistory as $order): ?>
-                                <div class="text-xs bg-gray-50 p-2 rounded">
-                                    <div class="font-medium">Order #<?= $order['id'] ?></div>
-                                    <div class="text-gray-500"><?= htmlspecialchars($order['created_at']) ?></div>
-                                </div>
-                            <?php endforeach; ?>
-                        </div>
-                    <?php else: ?>
-                        <p class="text-xs text-gray-500 text-center py-4">No orders yet</p>
+                        <p style="color: #64748b; font-size: 14px; grid-column: 1/-1;">No storefront catalog assets available. Hit the generator button above to seed data records.</p>
                     <?php endif; ?>
                 </div>
             </div>
-        </div>
-    </div>
-</body>
-</html>
+
+            <!-- RIGHT SIDEBAR COMPONENT COLUMN -->
+            <div>
+                <!-- Enhanced Shopping Cart Calculator Component Card -->
+                <div style="background: white; border: 1px solid #e2e8f0; border-radius: 16px; box-shadow: 0 4px 10px rgba(0,0,0,0.03); padding: 24px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #f1f5f9; padding-bottom: 14px; margin-bottom: 16px;">
+                        <h3 style="margin: 0; font-size: 18px; color: #0f172a; display: flex; align-items: center; gap: 8px;">🛒 Shopping Summary</h3>
+                        <span style="background: #eff6ff; color: #2563eb; font-weight: bold; padding: 3px 8px; border-radius: 20px; font-size: 12px;">Active Cart</span>
+                    </div>
+
+                    <div style="display: grid; gap: 14px; margin-bottom: 20px; max-height: 300px; overflow-y: auto; padding-right: 4px;">
+                        <?php 
+                        $runningTotal = 0;
+                        $cartItems = $db->query("SELECT c.quantity, p.name, p.price FROM cart_items c JOIN products p ON c.product_id = p.id WHERE c.cart_id = ?", [$cartId]);
+                        
+                        if (!empty($cartItems)):
+                            foreach ($cartItems as $item): 
+                                $itemSubtotal = $item['price'] * $item['quantity'];
+                                $runningTotal += $itemSubtotal;
+                        ?>
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding-bottom: 10px; border-bottom: 1px dashed #e2e8f0;">
+                                <div>
+                                    <h4 style="margin: 0 0 2px 0; color: #334155; font-size: 14px; font-weight: 600;"><?= htmlspecialchars($item['name']) ?></h4>
+                                    <span style="color: #64748b; font-size: 12px;">$<?= number_format($item['price'], 2) ?> × <?= $item['quantity'] ?></span>
+                                </div>
+                                <span style="font-weight: 600; color: #0f172a; font-size: 14px;">$<?= number_format($itemSubtotal, 2) ?></span>
+                            </div>
+                        <?php 
+                            endforeach; 
+                        else:
+                        ?>
+                            <p style="color: #94a3b8; font-size: 13px; text-align: center; padding: 15px 0; margin: 0;">Your basket is completely empty.</p>
+                        <?php endif; ?>
+                    </div>
+
+                    <div style="background: #f8fafc; padding: 14px; border-radius: 10px; margin-bottom: 20px; display: grid; gap: 6px;">
+                        <div style="display: flex; justify-content: space-between; font-size: 13px; color: #64748b;">
+                            <span>Subtotal</span>
+                            <span>$<?= number_format($runningTotal, 2) ?></span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 16px; color: #0f172a; border-top: 1px solid #e2e8f0; padding-top: 8px; margin-top: 4px;">
+                            <span>Total Balance:</span>
+                            <span>$<?= number_format($runningTotal, 2) ?></span>
+                        </div>
+                    </div>
+
+                    <div style="display: grid; gap: 10px;">
+                        <form action="index.php" method="POST" style="margin: 0;">
+                            <input type="hidden" name="action" value="checkout_stripe">
+                            <button type="submit" style="width: 100%; background: #4f46e5; color: white; border: none; text-align: center; padding: 12px; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; box-shadow: 0 2px 4px rgba(79, 70, 229, 0.15);">🔗 Proceed to Stripe Checkout</button>
+                        </form>
+                        
+
+                        
+                      

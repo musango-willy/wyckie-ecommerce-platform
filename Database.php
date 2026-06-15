@@ -30,10 +30,27 @@ class Database
     /**
      * Fetch all records from a table (e.g., pulling all products or orders)
      */
+        /**
+     * Execute SQL Query and return structured results
+     */
     public function query(string $sql, array $params = []): array
     {
         $stmt = $this->connection->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        
+        // If the query is an INSERT, UPDATE, or DELETE, stop here and return an empty array
+        if (preg_match('/^\s*(insert|update|delete|alter)/i', $sql)) {
+            return [];
+        }
+        
+        $results = $stmt->fetchAll();
+        
+        // If we requested a LIMIT 1 query, automatically flatten the array wrapper down to a single row
+        if (strpos(strtolower($sql), 'limit 1') !== false && !empty($results)) {
+            return $results[0];
+        }
+        
+        return $results;
     }
 }
+
