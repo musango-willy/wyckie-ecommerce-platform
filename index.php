@@ -115,18 +115,43 @@ try {
             }
         }
 
-        // 4. Handle Manual Product Creation
+        // 4. Handle Manual Product Creation with Media Optimization
         if ($action === 'create_product') {
             $name = htmlspecialchars($_POST['name']);
             $description = htmlspecialchars($_POST['description']);
             $price = floatval($_POST['price']);
             $stock = intval($_POST['stock']);
-            
-            $db->query("INSERT INTO products (name, description, price, stock) VALUES (?, ?, ?, ?)", [$name, $description, $price, $stock]);
-            $message = "✨ New product added to showroom!";
+            $imagePath = 'uploads/default.jpg'; // Fallback if no image is uploaded
+
+            // Process image file if it exists in the request upload block
+            if (isset($_FILES['product_image']) && $_FILES['product_image']['error'] === UPLOAD_ERR_OK) {
+                try {
+                    // Load your custom image optimization utility class engine
+                    $processor = new ImageProcessor($_FILES['product_image']['tmp_name']);
+                    
+                    // Create unique filename and force optimized modern format saving paths
+                    $fileName = 'prod_' . time() . '.webp';
+                    $destinationPath = __DIR__ . '/uploads/' . $fileName;
+
+                    // Execute pipeline operations: Resize to standard card layout size & compress
+                    $processor->resize(400, 400)
+                              ->compress(80)
+                              ->saveAsWebp($destinationPath);
+
+                    $imagePath = 'uploads/' . $fileName;
+                } catch (\Exception $e) {
+                    $message = "⚠️ Product saved, but image optimization failed: " . $e->getMessage();
+                }
+            }
+
+            // Insert into database including the newly generated image directory path asset
+            $db->query("INSERT INTO products (name, description, price, stock, image_path) VALUES (?, ?, ?, ?, ?)", [$name, $description, $price, $stock, $imagePath]);
+            $message = "✨ New product added to showroom with optimized media asset metrics!";
         }
 
         // 5. Bulk Generate 50 Assorted Inventory Items Seeder
+        // Note: Change the $imagePath assignment inside your seed_50_items loop if needed
+
         if ($action === 'seed_50_items') {
             $categories = ['Electronics', 'Apparel', 'Home Goods', 'Fitness'];
             $nouns = ['Pro', 'Max', 'Ultra', 'Classic', 'Elite', 'Eco', 'Smart'];
@@ -138,8 +163,10 @@ try {
                 $description = "Premium grade asset from our " . $cat . " collection. Built for durability and high-performance metrics.";
                 $price = rand(15, 299) + 0.99;
                 $stock = rand(5, 40);
-                
-                $db->query("INSERT INTO products (name, description, price, stock) VALUES (?, ?, ?, ?)", [$name, $description, $price, $stock]);
+            // Use a placeholder image URL from picsum for seeded items
+            $imagePath = "https://picsum.photos/seed/" . $i . "/400/400";
+
+            $db->query("INSERT INTO products (name, description, price, stock, image_path) VALUES (?, ?, ?, ?, ?)", [$name, $description, $price, $stock, $imagePath]);
             }
             $message = "🚀 Successfully injected 50 assorted showroom items!";
         }
