@@ -28,5 +28,10 @@ RUN composer install --no-interaction --optimize-autoloader
 # Adjust file storage permissions for your media optimization uploads folder
 RUN mkdir -p uploads && chmod -R 775 uploads && chown -R www-data:www-data uploads
 
-# Expose port 80 to web traffic
-EXPOSE 80
+# Configure Apache to bind to Render's dynamic $PORT environment variable
+RUN sed -i 's/Listen 80/Listen ${PORT}/g' /etc/apache2/ports.conf
+RUN sed -i 's/<VirtualHost \*:80>/<VirtualHost \*:${PORT}>/g' /etc/apache2/sites-available/000-default.conf
+
+# Set default port fallback for Render environment consistency
+ENV PORT=80
+EXPOSE ${PORT}
