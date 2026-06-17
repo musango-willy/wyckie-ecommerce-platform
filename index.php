@@ -79,29 +79,63 @@ try {
             $db->query("DELETE FROM cart_items WHERE cart_id = ?", [$cartId]);
             $message = "🗑️ Your shopping cart has been cleared.";
         }
-        // 2. Stripe Secure Session Checkout Redirection (Wrapper Optimization)
+           // 2. Stripe Secure Session Checkout Redirection (Reverted & Hardened)
         if ($action === 'checkout_stripe') {
+            // Force fetch rows explicitly from the database
             $cartItems = $db->query("SELECT c.quantity, p.name, p.price FROM cart_items c JOIN products p ON c.product_id = p.id WHERE c.cart_id = ?", [$cartId]);
             
             if (!empty($cartItems)) {
-                try {
-                    // Instantiate your newly integrated class wrapper object model
-                    $paymentGateway = new PaymentGateway($stripeKey);
-                    
-                    $successUrl = 'http://localhost/ecommerce/index.php?session_id={CHECKOUT_SESSION_ID}';
-                    $cancelUrl = 'http://localhost/ecommerce/index.php';
-                    
-                    // Generate checkout session link via wrapper architecture
-                    $checkoutUrl = $paymentGateway->createCartCheckoutSession($cartItems, $successUrl, $cancelUrl);
-                    
-                    // Flush items out of active basket log structures
-                    $db->query("DELETE FROM cart_items WHERE cart_id = ?", [$cartId]);
-                    
-                    // Redirect browser straight to Stripe checkout screen
-                    header("Location: " . $checkoutUrl);
-                    exit();
-                } catch (\Exception $e) {
-                    $message = "❌ Checkout Error: " . $e->getMessage();
+                $lineItems = [];
+                
+                // If query returns a single un-nested item row map, wrap it into a collection matrix manually
+                if (isset($cartItems['price']) || isset($cartItems['name'])) {
+                    $cartItems = [$cartItems];
+                }
+
+                foreach ($cartItems as $item) {
+                    if (!isset($item['price']) && !isset($item['name'])) {
+                        continue;
+                    }
+
+                    $rawPrice = floatval($item['price'] ?? 0);
+                    $priceInCents = intval(round($rawPrice * 100)); // Strict integer translation
+                    $quantity = intval($item['quantity'] ?? 1);
+
+                    $lineItems[] = [
+                        'price_data' => [
+                            'currency' => 'usd',
+                            'unit_amount' => $priceInCents,
+                            'product_data' => [
+                                'name' => strval($item['name'] ?? 'Store Asset Item'),
+                            ],
+                        ],
+                        'quantity' => $quantity,
+                    ];
+                }
+
+                if (!empty($lineItems)) {
+                    try {
+                        // Natively invoke initialization parameters inline using your hidden keys
+                        \Stripe\Stripe::setApiKey($stripeKey);
+
+                        $session = \Stripe\Checkout\Session::create([
+                            'payment_method_types' => ['card'],
+                            'line_items'           => $lineItems,
+                            'mode'                 => 'payment',
+                            'success_url'          => 'http://localhost/ecommerce/index.php?session_id={CHECKOUT_SESSION_ID}',
+                            'cancel_url'           => 'http://localhost/ecommerce/index.php',
+                        ]);
+                        
+                        // Automatically drop table items upon successful validation redirects
+                        $db->query("DELETE FROM cart_items WHERE cart_id = ?", [$cartId]);
+                        
+                        header("Location: " . $session->url);
+                        exit();
+                    } catch (\Exception $e) {
+                        $message = "❌ Stripe SDK Error: " . $e->getMessage();
+                    }
+                } else {
+                    $message = "⚠️ Could not parse valid product data layout records.";
                 }
             } else {
                 $message = "⚠️ Your shopping cart is empty. Cannot initialize checkout session.";
