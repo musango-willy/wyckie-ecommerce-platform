@@ -7,6 +7,12 @@ error_reporting(E_ALL);
 require_once __DIR__ . '/vendor/autoload.php';
 require_once __DIR__ . '/Database.php';
 use Wyckie\EcommercePlatform\Database;
+require_once __DIR__ . '/vendor/autoload.php';
+require_once __DIR__ . '/Database.php';
+require_once __DIR__ . '/PaymentGateway.php'; // 👈 LOAD YOUR GATEWAY FILE HERE
+
+use Wyckie\EcommercePlatform\PaymentGateway; // 👈 IMPORT THE GATEWAY NAMESPACE
+
 
 // Safe dotenv package layer registration
 if (file_exists(__DIR__ . '/.env')) {
@@ -73,46 +79,35 @@ try {
             $db->query("DELETE FROM cart_items WHERE cart_id = ?", [$cartId]);
             $message = "🗑️ Your shopping cart has been cleared.";
         }
-
-        // 2. Stripe Secure Session Checkout Redirection
+        // 2. Stripe Secure Session Checkout Redirection (Wrapper Optimization)
         if ($action === 'checkout_stripe') {
             $cartItems = $db->query("SELECT c.quantity, p.name, p.price FROM cart_items c JOIN products p ON c.product_id = p.id WHERE c.cart_id = ?", [$cartId]);
             
             if (!empty($cartItems)) {
-                $lineItems = [];
-                foreach ($cartItems as $item) {
-                    $lineItems[] = [
-                        'price_data' => [
-                            'currency' => 'usd',
-                            'product_data' => ['name' => $item['name']],
-                            'unit_amount' => intval($item['price'] * 100), // Converted to cents
-                        ],
-                        'quantity' => intval($item['quantity']),
-                    ];
-                }
-
                 try {
-                    \Stripe\Stripe::setApiKey($stripeKey);
-                    $session = \Stripe\Checkout\Session::create([
-                        'payment_method_types' => ['card'],
-                        'line_items' => $lineItems,
-                        'mode' => 'payment',
-                        'success_url' => 'http://localhost/ecommerce/index.php?session_id={CHECKOUT_SESSION_ID}',
-                        'cancel_url' => 'http://localhost/ecommerce/index.php',
-                    ]);
+                    // Instantiate your newly integrated class wrapper object model
+                    $paymentGateway = new PaymentGateway($stripeKey);
                     
-                    // Flush items immediately out of basket database logs upon setup completion
+                    $successUrl = 'http://localhost/ecommerce/index.php?session_id={CHECKOUT_SESSION_ID}';
+                    $cancelUrl = 'http://localhost/ecommerce/index.php';
+                    
+                    // Generate checkout session link via wrapper architecture
+                    $checkoutUrl = $paymentGateway->createCartCheckoutSession($cartItems, $successUrl, $cancelUrl);
+                    
+                    // Flush items out of active basket log structures
                     $db->query("DELETE FROM cart_items WHERE cart_id = ?", [$cartId]);
                     
-                    header("Location: " . $session->url);
+                    // Redirect browser straight to Stripe checkout screen
+                    header("Location: " . $checkoutUrl);
                     exit();
                 } catch (\Exception $e) {
-                    $message = "❌ Stripe Gateway Error: " . $e->getMessage();
+                    $message = "❌ Checkout Error: " . $e->getMessage();
                 }
             } else {
                 $message = "⚠️ Your shopping cart is empty. Cannot initialize checkout session.";
             }
         }
+
 
         // 3. Add Item into Basket Logic
         if ($action === 'add_to_cart') {
